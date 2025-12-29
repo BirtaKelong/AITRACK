@@ -18,7 +18,12 @@ import {
   Sun,
   Download,
   FileText,
-  ChevronRight
+  Edit2,
+  LogOut,
+  User as UserIcon,
+  Mail,
+  Lock,
+  ArrowRight
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -33,32 +38,27 @@ import {
   Pie,
   Legend
 } from 'recharts';
-import { Transaction, TransactionType, Budget, RecurringTransaction } from './types';
+import { Transaction, TransactionType, Budget, RecurringTransaction, User } from './types';
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES, CATEGORY_COLORS, CURRENCY_SYMBOL } from './constants';
 import { getFinancialInsights } from './services/geminiService';
 
 const App: React.FC = () => {
-  // --- Core State ---
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('fin-track-dark-mode');
-    return saved ? JSON.parse(saved) : false;
+  // --- Auth State ---
+  const [user, setUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('fin-track-session');
+    return saved ? JSON.parse(saved) : null;
   });
+  const [authView, setAuthView] = useState<'login' | 'signup'>('login');
+  const [authError, setAuthError] = useState('');
+  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
 
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('fin-track-tx');
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  const [budgets, setBudgets] = useState<Budget[]>(() => {
-    const saved = localStorage.getItem('fin-track-budgets');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // --- Core State (User Dependent) ---
+  const [darkMode, setDarkMode] = useState<boolean>(false);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [recurring, setRecurring] = useState<RecurringTransaction[]>([]);
 
-  const [recurring, setRecurring] = useState<RecurringTransaction[]>(() => {
-    const saved = localStorage.getItem('fin-track-recurring');
-    return saved ? JSON.parse(saved) : [];
-  });
-
+  // --- UI State ---
   const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'insights' | 'budgets' | 'reports'>('dashboard');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalType, setModalType] = useState<'transaction' | 'budget' | 'recurring'>('transaction');
@@ -70,7 +70,7 @@ const App: React.FC = () => {
   const [aiInsights, setAiInsights] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  // --- Form States ---
+  // --- Form States (Transaction/Budget) ---
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<TransactionType>('expense');
   const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
@@ -78,29 +78,91 @@ const App: React.FC = () => {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [frequency, setFrequency] = useState<'daily' | 'weekly' | 'monthly'>('monthly');
 
-  // --- Effects ---
+  // --- Load User Data on Auth Change ---
   useEffect(() => {
-    localStorage.setItem('fin-track-dark-mode', JSON.stringify(darkMode));
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
+    if (user) {
+      const uId = user.id;
+      const tx = localStorage.getItem(`fin-track-tx-${uId}`);
+      const bg = localStorage.getItem(`fin-track-budgets-${uId}`);
+      const rc = localStorage.getItem(`fin-track-recurring-${uId}`);
+      const dm = localStorage.getItem(`fin-track-dark-mode-${uId}`);
+
+      setTransactions(tx ? JSON.parse(tx) : []);
+      setBudgets(bg ? JSON.parse(bg) : []);
+      setRecurring(rc ? JSON.parse(rc) : []);
+      setDarkMode(dm ? JSON.parse(dm) : false);
+      localStorage.setItem('fin-track-session', JSON.stringify(user));
     } else {
-      document.documentElement.classList.remove('dark');
+      localStorage.removeItem('fin-track-session');
     }
-  }, [darkMode]);
+  }, [user]);
+
+  // --- Persistence Effects ---
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem(`fin-track-dark-mode-${user.id}`, JSON.stringify(darkMode));
+      if (darkMode) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+  }, [darkMode, user]);
 
   useEffect(() => {
-    localStorage.setItem('fin-track-tx', JSON.stringify(transactions));
-    checkBudgetExceedance();
-  }, [transactions]);
+    if (user) {
+      localStorage.setItem(`fin-track-tx-${user.id}`, JSON.stringify(transactions));
+      checkBudgetExceedance();
+    }
+  }, [transactions, user]);
 
   useEffect(() => {
-    localStorage.setItem('fin-track-budgets', JSON.stringify(budgets));
-  }, [budgets]);
+    if (user) {
+      localStorage.setItem(`fin-track-budgets-${user.id}`, JSON.stringify(budgets));
+    }
+  }, [budgets, user]);
 
   useEffect(() => {
-    localStorage.setItem('fin-track-recurring', JSON.stringify(recurring));
-    checkUpcomingRecurring();
-  }, [recurring]);
+    if (user) {
+      localStorage.setItem(`fin-track-recurring-${user.id}`, JSON.stringify(recurring));
+      checkUpcomingRecurring();
+    }
+  }, [recurring, user]);
+
+  // --- Auth Handlers ---
+  const handleAuth = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    const users: User[] = JSON.parse(localStorage.getItem('fin-track-users') || '[]');
+
+    if (authView === 'signup') {
+      if (users.find(u => u.email === authForm.email)) {
+        setAuthError('User with this email already exists.');
+        return;
+      }
+      const newUser: User = {
+        id: crypto.randomUUID(),
+        name: authForm.name,
+        email: authForm.email,
+        password: authForm.password
+      };
+      localStorage.setItem('fin-track-users', JSON.stringify([...users, newUser]));
+      setUser(newUser);
+    } else {
+      const existingUser = users.find(u => u.email === authForm.email && u.password === authForm.password);
+      if (existingUser) {
+        setUser(existingUser);
+      } else {
+        setAuthError('Invalid email or password.');
+      }
+    }
+  };
+
+  const logout = () => {
+    setUser(null);
+    setActiveTab('dashboard');
+    setAiInsights('');
+  };
 
   // --- Notification Logic ---
   const requestPermission = async () => {
@@ -267,6 +329,20 @@ const App: React.FC = () => {
     setDate(new Date().toISOString().split('T')[0]);
   };
 
+  const openNewModal = (type: 'transaction' | 'budget' | 'recurring') => {
+    resetForm();
+    setModalType(type);
+    setIsModalOpen(true);
+  };
+
+  const editBudget = (budget: Budget) => {
+    resetForm();
+    setCategory(budget.category);
+    setAmount(budget.limit.toString());
+    setModalType('budget');
+    setIsModalOpen(true);
+  };
+
   const deleteTransaction = (id: string) => setTransactions(transactions.filter(t => t.id !== id));
   const deleteBudget = (cat: string) => setBudgets(budgets.filter(b => b.category !== cat));
   const deleteRecurring = (id: string) => setRecurring(recurring.filter(r => r.id !== id));
@@ -284,6 +360,95 @@ const App: React.FC = () => {
     setIsAnalyzing(false);
   };
 
+  // --- Auth View ---
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-100">
+          <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-8 text-white text-center">
+            <div className="bg-white/20 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
+              <Wallet size={32} />
+            </div>
+            <h1 className="text-2xl font-bold">Welcome to FinTrack AI</h1>
+            <p className="text-blue-100 mt-2">Your smart path to financial freedom.</p>
+          </div>
+          
+          <div className="p-8">
+            <div className="flex bg-slate-100 p-1 rounded-xl mb-8">
+              <button 
+                onClick={() => setAuthView('login')}
+                className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${authView === 'login' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}
+              >
+                Login
+              </button>
+              <button 
+                onClick={() => setAuthView('signup')}
+                className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${authView === 'signup' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}
+              >
+                Signup
+              </button>
+            </div>
+
+            <form onSubmit={handleAuth} className="space-y-4">
+              {authView === 'signup' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label>
+                  <div className="relative">
+                    <UserIcon className="absolute left-3 top-3 text-slate-400" size={18} />
+                    <input 
+                      type="text" 
+                      required 
+                      value={authForm.name}
+                      onChange={(e) => setAuthForm({...authForm, name: e.target.value})}
+                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="John Doe"
+                    />
+                  </div>
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email Address</label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-3 text-slate-400" size={18} />
+                  <input 
+                    type="email" 
+                    required 
+                    value={authForm.email}
+                    onChange={(e) => setAuthForm({...authForm, email: e.target.value})}
+                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="name@company.com"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-3 text-slate-400" size={18} />
+                  <input 
+                    type="password" 
+                    required 
+                    value={authForm.password}
+                    onChange={(e) => setAuthForm({...authForm, password: e.target.value})}
+                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="••••••••"
+                  />
+                </div>
+              </div>
+
+              {authError && <p className="text-rose-500 text-sm font-medium">{authError}</p>}
+
+              <button className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 active:scale-[0.98]">
+                {authView === 'login' ? 'Login' : 'Create Account'}
+                <ArrowRight size={18} />
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Main App Content ---
   return (
     <div className={`min-h-screen transition-colors duration-200 pb-24 md:pb-8 ${darkMode ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-900'}`}>
       {/* Header */}
@@ -313,8 +478,25 @@ const App: React.FC = () => {
               <Bell size={20} />
             </button>
           )}
+
+          <div className={`h-8 w-[1px] ${darkMode ? 'bg-slate-700' : 'bg-slate-200'}`} />
+
+          <div className="flex items-center gap-3 ml-1">
+            <div className="text-right hidden sm:block">
+              <p className={`text-xs font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{user.name}</p>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">Personal Account</p>
+            </div>
+            <button 
+              onClick={logout}
+              className={`p-2 rounded-lg transition-all ${darkMode ? 'text-slate-400 hover:text-rose-400 hover:bg-slate-700' : 'text-slate-500 hover:text-rose-600 hover:bg-rose-50'}`}
+              title="Logout"
+            >
+              <LogOut size={20} />
+            </button>
+          </div>
+
           <button 
-            onClick={() => { setModalType('transaction'); setIsModalOpen(true); }}
+            onClick={() => openNewModal('transaction')}
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full flex items-center gap-2 transition-all shadow-lg active:scale-95"
           >
             <Plus size={20} />
@@ -324,6 +506,13 @@ const App: React.FC = () => {
       </header>
 
       <main className="max-w-6xl mx-auto p-4 md:p-8 space-y-8">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold">Welcome back, {user.name.split(' ')[0]} 👋</h2>
+            <p className="text-slate-500 dark:text-slate-400">Here's your financial overview for this month.</p>
+          </div>
+        </div>
+
         {/* Permission Callout */}
         {notificationPermission === 'default' && (
           <div className={`border p-4 rounded-2xl flex items-center justify-between gap-4 transition-colors ${darkMode ? 'bg-blue-900/30 border-blue-800' : 'bg-blue-50 border-blue-100'}`}>
@@ -486,7 +675,7 @@ const App: React.FC = () => {
                           {tx.type === 'income' ? '+' : '-'}{CURRENCY_SYMBOL}{tx.amount.toLocaleString()}
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <button onClick={() => deleteTransaction(tx.id)} className="text-slate-400 hover:text-rose-500 transition-colors">
+                          <button onClick={() => deleteTransaction(tx.id)} className="text-slate-400 hover:text-rose-600 transition-colors">
                             <Trash2 size={18} />
                           </button>
                         </td>
@@ -508,7 +697,7 @@ const App: React.FC = () => {
                     Monthly Budgets
                   </h3>
                   <button 
-                    onClick={() => { setModalType('budget'); setIsModalOpen(true); }}
+                    onClick={() => openNewModal('budget')}
                     className={`text-sm font-bold flex items-center gap-1 transition-colors ${darkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'}`}
                   >
                     <Plus size={16} /> Set Budget
@@ -526,7 +715,6 @@ const App: React.FC = () => {
                       .reduce((sum, t) => sum + t.amount, 0);
                     const progress = Math.min((spent / b.limit) * 100, 100);
                     
-                    // Determine progress color: Green (<70), Yellow (70-90), Red (>90)
                     const progressColor = progress > 90 
                       ? 'bg-rose-500' 
                       : progress > 70 
@@ -536,8 +724,9 @@ const App: React.FC = () => {
                     return (
                       <div key={b.category} className={`p-4 border rounded-xl hover:shadow-md transition-all group ${darkMode ? 'border-slate-700' : 'border-slate-100'}`}>
                         <div className="flex justify-between items-center mb-2">
-                          <div className="flex items-center gap-2">
-                            <span className={`font-medium ${darkMode ? 'text-white' : 'text-slate-900'}`}>{b.category}</span>
+                          <div className="flex items-center gap-2 group/edit cursor-pointer" onClick={() => editBudget(b)}>
+                            <span className={`font-medium transition-colors group-hover/edit:text-blue-500 ${darkMode ? 'text-white' : 'text-slate-900'}`}>{b.category}</span>
+                            <Edit2 size={12} className="opacity-0 group-hover/edit:opacity-100 transition-opacity text-blue-500" />
                             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${progress >= 100 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}>
                               {Math.round(progress)}%
                             </span>
@@ -575,7 +764,7 @@ const App: React.FC = () => {
                     Recurring Bills
                   </h3>
                   <button 
-                    onClick={() => { setModalType('recurring'); setIsModalOpen(true); }}
+                    onClick={() => openNewModal('recurring')}
                     className={`text-sm font-bold flex items-center gap-1 transition-colors ${darkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'}`}
                   >
                     <Plus size={16} /> Add Recurring
@@ -667,18 +856,21 @@ const App: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className={`p-6 rounded-3xl border transition-colors ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
                    <h4 className="text-lg font-bold mb-4">Highest Expenditure Category</h4>
-                   {chartData.length > 0 ? (
-                     <div className="flex items-center justify-between p-4 bg-rose-50 dark:bg-rose-900/20 rounded-2xl border border-rose-100 dark:border-rose-800">
-                        <div>
-                          <p className="text-sm text-rose-600 dark:text-rose-400 font-medium">Top Category</p>
-                          <p className="text-xl font-bold">{chartData.sort((a,b) => b.value - a.value)[0].name}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-rose-600 dark:text-rose-400 font-medium">Amount Spent</p>
-                          <p className="text-xl font-bold">{CURRENCY_SYMBOL}{chartData.sort((a,b) => b.value - a.value)[0].value.toLocaleString()}</p>
-                        </div>
-                     </div>
-                   ) : <p className="text-slate-400">Not enough data</p>}
+                   {chartData.length > 0 ? (() => {
+                     const topCategory = [...chartData].sort((a,b) => b.value - a.value)[0];
+                     return (
+                      <div className="flex items-center justify-between p-4 bg-rose-50 dark:bg-rose-900/20 rounded-2xl border border-rose-100 dark:border-rose-800">
+                          <div>
+                            <p className="text-sm text-rose-600 dark:text-rose-400 font-medium">Top Category</p>
+                            <p className="text-xl font-bold">{topCategory.name}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm text-rose-600 dark:text-rose-400 font-medium">Amount Spent</p>
+                            <p className="text-xl font-bold">{CURRENCY_SYMBOL}{topCategory.value.toLocaleString()}</p>
+                          </div>
+                      </div>
+                     );
+                   })() : <p className="text-slate-400">Not enough data</p>}
                 </div>
                 <div className={`p-6 rounded-3xl border transition-colors ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
                    <h4 className="text-lg font-bold mb-4">Savings Progress</h4>
@@ -795,7 +987,9 @@ const App: React.FC = () => {
                 </>
               )}
 
-              <button type="submit" className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95 mt-4">Save {modalType}</button>
+              <button type="submit" className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95 mt-4">
+                {modalType === 'budget' && budgets.find(b => b.category === category) ? 'Update' : 'Save'} {modalType}
+              </button>
             </form>
           </div>
         </div>

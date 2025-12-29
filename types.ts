@@ -1,6 +1,13 @@
 
 export type TransactionType = 'income' | 'expense';
 
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  password?: string; // Stored locally for this demo
+}
+
 export interface Transaction {
   id: string;
   date: string;
